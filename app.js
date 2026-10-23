@@ -3,6 +3,7 @@ const PLAYER_PROFILE_KEY = 'housewarming-bingo-player-profile-v1';
 const PANEL_STATE_KEY = 'housewarming-bingo-panels-v1';
 const PRESENCE_ENDPOINT = '/api/presence';
 const SYNC_INTERVAL_MS = 8000;
+const LEADERBOARD_SIZE = 10;
 const EMOJI_OPTIONS = ['🐸','🐱','🐙','🦋','🦈','🍒','🍓','🥑','🍸','🪩','👽','🤠','🤡','🐧','🦖','🌷','🐝','🧃','🦀','🎀','🐶','🦄','🌈','🍉','🪐','🌙','🎉','🍔','🧁','🔥'];
 const FREE_INDEX = 12;
 const WINNING_LINES = [
@@ -53,7 +54,7 @@ const BINGO_PROMPTS = [
   { id: 'prompt-30', text: 'Has lychee as their favorite soju flavor' },
   { id: 'prompt-31', text: 'Does not have a driver\'s license' },
   { id: 'prompt-32', text: 'Has taken more than 10 AP classes in high school' },
-  { id: 'prompt-33', text: 'Spread a crazy rumor about Cynthia' },
+  { id: 'prompt-33', text: 'Has spread a crazy rumor about Cynthia' },
   { id: 'prompt-34', text: 'Has never had a cavity' },
   { id: 'prompt-35', text: 'Has a twin' },
   { id: 'prompt-36', text: 'Has a tattoo they regret' },
@@ -97,9 +98,6 @@ const newCardButton = document.getElementById('newCardButton');
 const clearProgressButton = document.getElementById('clearProgressButton');
 const bingoToast = document.getElementById('bingoToast');
 const dismissBingoButton = document.getElementById('dismissBingoButton');
-const rulesButton = document.getElementById('rulesButton');
-const rulesModal = document.getElementById('rulesModal');
-const closeRulesButton = document.getElementById('closeRulesButton');
 const confettiLayer = document.getElementById('confettiLayer');
 const joinScreen = document.getElementById('joinScreen');
 const gameScreen = document.getElementById('gameScreen');
@@ -222,24 +220,32 @@ function getEventKey(entry) {
 function announceNewBingos(feed) {
   const isFirstLoad = !party.feedPrimed;
   party.feedPrimed = true;
+  // Your own bingos already get the full-screen toast, but a Most Spotted award is earned by
+  // other people's picks, so it's announced to the winner too.
   const newWins = feed.filter((entry) => (
-    (entry.type === 'bingo' || entry.type === 'fullBoard')
-    && entry.playerId !== state.playerId
+    ((entry.type === 'bingo' || entry.type === 'fullBoard') && entry.playerId !== state.playerId
+      || entry.type === 'spottedAward')
     && !party.seenEventIds.has(getEventKey(entry))
   ));
 
   feed.forEach((entry) => party.seenEventIds.add(getEventKey(entry)));
 
   if (!isFirstLoad && newWins.length) {
-    showPartyAnnouncement(newWins.find((entry) => entry.type === 'fullBoard') || newWins[0]);
+    showPartyAnnouncement(
+      newWins.find((entry) => entry.type === 'fullBoard')
+      || newWins.find((entry) => entry.type === 'spottedAward')
+      || newWins[0]
+    );
   }
 }
 
 function showPartyAnnouncement(entry) {
   const isFullBoard = entry.type === 'fullBoard';
-  partyAnnouncementTag.textContent = isFullBoard ? 'FULL BOARD! 🦋' : 'BINGO!';
+  const isSpottedAward = entry.type === 'spottedAward';
+  partyAnnouncementTag.textContent = isFullBoard ? 'FULL BOARD! 🦋' : isSpottedAward ? 'MOST SPOTTED 👀' : 'BINGO!';
   partyAnnouncementText.textContent = `${entry.emoji} ${entry.name} ${entry.text}`;
   partyAnnouncement.classList.toggle('is-full-board', isFullBoard);
+  partyAnnouncement.classList.toggle('is-spotted-award', isSpottedAward);
   partyAnnouncement.hidden = false;
   if (bingoToast.hidden) {
     triggerConfetti(isFullBoard ? 160 : 60);
@@ -723,7 +729,7 @@ function renderLeaderboard() {
 
   leaderboardList.innerHTML = '';
 
-  leaderboard.forEach((player, index) => {
+  leaderboard.slice(0, LEADERBOARD_SIZE).forEach((player, index) => {
     const item = document.createElement('li');
     item.className = 'leaderboard-item';
     item.classList.toggle('is-offline', !player.online);
@@ -775,6 +781,7 @@ function renderActivityFeed() {
     item.className = 'activity-item';
     item.classList.toggle('is-bingo', entry.type === 'bingo');
     item.classList.toggle('is-full-board', entry.type === 'fullBoard');
+    item.classList.toggle('is-spotted-award', entry.type === 'spottedAward');
 
     const text = document.createElement('span');
     text.textContent = `${entry.emoji} ${entry.name} ${entry.text}`;
@@ -977,29 +984,7 @@ guestNameInput.addEventListener('keydown', (event) => {
   }
 });
 
-rulesButton.addEventListener('click', () => {
-  rulesModal.hidden = false;
-  rulesModal.setAttribute('aria-hidden', 'false');
-});
-
-closeRulesButton.addEventListener('click', () => {
-  rulesModal.hidden = true;
-  rulesModal.setAttribute('aria-hidden', 'true');
-});
-
-rulesModal.addEventListener('click', (event) => {
-  if (event.target === rulesModal) {
-    rulesModal.hidden = true;
-    rulesModal.setAttribute('aria-hidden', 'true');
-  }
-});
-
 document.addEventListener('keydown', (event) => {
-  if (event.key === 'Escape' && !rulesModal.hidden) {
-    rulesModal.hidden = true;
-    rulesModal.setAttribute('aria-hidden', 'true');
-  }
-
   if (event.key === 'Escape' && !bingoToast.hidden) {
     hideBingoToast();
   }

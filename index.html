@@ -60,16 +60,20 @@
               <span class="player-chip-edit" aria-hidden="true">✏️</span>
             </button>
           </div>
-          <p class="subtitle">Kathryn × Cynthia × Natasha</p>
-          <p class="instruction">Find someone who fits the square. Five in a row wins.</p>
+          <section class="instructions" aria-labelledby="instructionsTitle">
+            <h2 id="instructionsTitle" class="instructions-title">How to play</h2>
+            <ol class="instructions-list">
+              <li>Find someone at the party who fits a square.</li>
+              <li>Tap the square and pick them from the players online, or type their name.</li>
+              <li>Get five in a row, column, or diagonal to win.</li>
+              <li>Tap “New Card” for a fresh board at any time.</li>
+            </ol>
+          </section>
         </header>
 
         <main class="game" aria-live="polite">
           <div class="status-row">
             <span id="progressLabel" class="progress-pill" aria-live="polite">0 / 24 completed</span>
-            <button id="rulesButton" class="text-button" type="button" aria-controls="rulesModal">
-              How to play
-            </button>
           </div>
 
           <div id="board" class="board" role="grid" aria-label="Housewarming bingo board"></div>
@@ -154,21 +158,6 @@
           <button id="saveSquareButton" class="primary-button" type="button">Save</button>
           <button id="removeSquareButton" class="secondary-button" type="button" hidden>Unmark</button>
         </div>
-      </div>
-    </div>
-
-    <div id="rulesModal" class="modal" role="dialog" aria-modal="true" aria-labelledby="rulesTitle" hidden>
-      <div class="modal-card">
-        <button id="closeRulesButton" class="close-button" type="button" aria-label="Close rules">
-          ×
-        </button>
-        <h2 id="rulesTitle">How to play</h2>
-        <ol>
-          <li>Find someone at the party who fits a square.</li>
-          <li>Tap the square and pick them from the players online, or type their name.</li>
-          <li>Complete five in a row, column, or diagonal to win.</li>
-          <li>Press “New Card” for a fresh random board at any time.</li>
-        </ol>
       </div>
     </div>
 

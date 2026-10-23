@@ -17,6 +17,27 @@ const FULL_BOARD_LINES = [
   'is wayyyy too popular 🙄 how tf do you even fill out the whole board'
 ];
 
+// Announced once each, the moment someone has been put on this many squares in total.
+const SPOTTED_AWARDS = [
+  { count: 10, text: 'has been spotted on 10 squares 👀 Most Spotted: Bronze 🥉' },
+  { count: 20, text: 'has been spotted on 20 squares 👀👀 Most Spotted: Silver 🥈' },
+  { count: 40, text: 'has been spotted on 40 squares 🤯 Most Spotted: GOLD 🥇 Who even ARE you' }
+];
+
+// Ordered smallest to biggest. `type` drives styling and banners on the client.
+const MILESTONES = [
+  { key: 'squares4', type: 'score', isReached: (player) => player.score >= 4, text: () => 'is off to a hot start with 4 squares 🔥' },
+  { key: 'bingo1', type: 'bingo', isReached: (player) => player.bingos >= 1, text: () => 'got BINGO! 🤪' },
+  { key: 'bingo2', type: 'bingo', isReached: (player) => player.bingos >= 2, text: () => 'got a DOUBLE BINGO bitchesss! 🤙😎🎉' },
+  { key: 'squares23', type: 'score', isReached: (player) => player.score >= 23, text: () => 'is ONE square away from a full board 😱' },
+  {
+    key: 'fullBoard',
+    type: 'fullBoard',
+    isReached: (player) => player.score >= FULL_BOARD_SCORE,
+    text: () => FULL_BOARD_LINES[Math.floor(Math.random() * FULL_BOARD_LINES.length)]
+  }
+];
+
 const REDIS_URL = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
 const REDIS_TOKEN = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
 
@@ -45,6 +66,10 @@ async function redis(commands) {
 
 function inboxKey(playerId) {
   return `bingo:inbox:${playerId}`;
+}
+
+function spottersKey(playerId) {
+  return `bingo:spotters:${playerId}`;
 }
 
 function parseJson(value) {
@@ -159,7 +184,8 @@ module.exports = async function handler(req, res) {
       bingos: cleanInt(body.bingos, 12),
       lastSeen: now,
       left: isLeaving,
-      secret: secret || (previous && previous.secret) || ''
+      secret: secret || (previous && previous.secret) || '',
+      milestones: (previous && Array.isArray(previous.milestones)) ? previous.milestones : []
     };
     players[id] = player;
 
@@ -175,40 +201,73 @@ module.exports = async function handler(req, res) {
     if (previous && (previous.name !== player.name || previous.emoji !== player.emoji)) {
       addEvent('rename', `is the new look for ${previous.emoji} ${previous.name}`);
     }
-    const isFullBoard =player.score === FULL_BOARD_SCORE && (!previous || previous.score < FULL_BOARD_SCORE);
-    if (isFullBoard) {
-      addEvent('fullBoard', FULL_BOARD_LINES[Math.floor(Math.random() * FULL_BOARD_LINES.length)]);
-    } else if (previous && player.score > previous.score) {
-      addEvent('score', `is up to ${player.score} square${player.score === 1 ? '' : 's'}`);
-    }
-    if (!isFullBoard && player.bingos > (previous ? previous.bingos : 0)) {
-      addEvent('bingo', player.bingos > 1 ? `got another BINGO bitchesss! 🤙😎 (${player.bingos} lines) 🎉` : 'got BINGO! 🤪');
+    // Progress only reaches the feed at a few milestones, each announced once per player so
+    // clearing progress or dealing a new card can't repeat them. When several are reached in
+    // one sync, only the biggest is announced and the smaller ones are marked as done.
+    const reached = MILESTONES.filter((milestone) => (
+      !player.milestones.includes(milestone.key) && milestone.isReached(player)
+    ));
+    if (reached.length) {
+      const biggest = reached[reached.length - 1];
+      addEvent(biggest.type, biggest.text());
+      player.milestones = [...player.milestones, ...reached.map((milestone) => milestone.key)];
     }
 
     const writes = [
       ['HSET', PLAYERS_KEY, id, JSON.stringify(player)],
       ['EXPIRE', PLAYERS_KEY, KEY_TTL_SECONDS]
     ];
+
+    // Spots go only to the spotted player's private inbox, never the shared feed, so other
+    // guests with the same square don't get the answer.
+    const spots = (Array.isArray(body.spots) ? body.spots : [])
+      .slice(0, MAX_SPOTS_PER_REQUEST)
+      .map((spot) => ({ targetId: cleanText(spot && spot.targetId, 64, ''), prompt: cleanText(spot && spot.prompt, 160, '') }))
+      .filter((spot) => spot.targetId && spot.targetId !== id && players[spot.targetId] && spot.prompt);
+
+    if (spots.length) {
+      // Each spotter + square counts once, so un-marking and re-picking someone can't
+      // inflate their total or send them repeat notifications.
+      const spotResults = await redis(spots.flatMap((spot) => [
+        ['SADD', spottersKey(spot.targetId), `${id}|${spot.prompt}`],
+        ['SCARD', spottersKey(spot.targetId)],
+        ['EXPIRE', spottersKey(spot.targetId), KEY_TTL_SECONDS]
+      ]));
+
+      spots.forEach((spot, index) => {
+        const isNewSpot = spotResults[index * 3] === 1;
+        const spottedTotal = spotResults[index * 3 + 1];
+        if (!isNewSpot) {
+          return;
+        }
+
+        const notification = { id: `${now}-${id}-${index}`, fromName: player.name, fromEmoji: player.emoji, prompt: spot.prompt, at: now };
+        writes.push(['LPUSH', inboxKey(spot.targetId), JSON.stringify(notification)]);
+        writes.push(['LTRIM', inboxKey(spot.targetId), 0, INBOX_LENGTH - 1]);
+        writes.push(['EXPIRE', inboxKey(spot.targetId), KEY_TTL_SECONDS]);
+
+        // Only the count is announced, never which squares, so nothing is spoiled.
+        const award = SPOTTED_AWARDS.find((entry) => entry.count === spottedTotal);
+        if (award) {
+          const target = players[spot.targetId];
+          events.push({
+            id: `${now}-${spot.targetId}-spotted${award.count}`,
+            type: 'spottedAward',
+            playerId: spot.targetId,
+            emoji: target.emoji,
+            name: target.name,
+            text: award.text
+          });
+        }
+      });
+    }
+
     const newFeedEntries = events.map((event) => JSON.stringify({ ...event, at: now }));
     if (newFeedEntries.length) {
       writes.push(['LPUSH', FEED_KEY, ...newFeedEntries]);
       writes.push(['LTRIM', FEED_KEY, 0, FEED_LENGTH - 1]);
       writes.push(['EXPIRE', FEED_KEY, KEY_TTL_SECONDS]);
     }
-    // Spots go only to the spotted player's private inbox, never the shared feed, so other
-    // guests with the same square don't get the answer.
-    const spots = (Array.isArray(body.spots) ? body.spots : []).slice(0, MAX_SPOTS_PER_REQUEST);
-    spots.forEach((spot, index) => {
-      const targetId = cleanText(spot && spot.targetId, 64, '');
-      const prompt = cleanText(spot && spot.prompt, 160, '');
-      if (!targetId || targetId === id || !players[targetId] || !prompt) {
-        return;
-      }
-      const notification = { id: `${now}-${id}-${index}`, fromName: player.name, fromEmoji: player.emoji, prompt, at: now };
-      writes.push(['LPUSH', inboxKey(targetId), JSON.stringify(notification)]);
-      writes.push(['LTRIM', inboxKey(targetId), 0, INBOX_LENGTH - 1]);
-      writes.push(['EXPIRE', inboxKey(targetId), KEY_TTL_SECONDS]);
-    });
 
     // A leave beacon's response is never read, so keep the inbox for the next visit.
     const spotted = isLeaving ? [] : (inbox || []).map(parseJson).filter(Boolean).reverse();
